@@ -12,18 +12,20 @@ Model = TypeVar("Model", PreTrainedModel, str)
 
 
 class OptimizedRepresentation(ABC):
-    @staticmethod
+    @classmethod
     @abstractmethod
     def _compress(
+        cls: Type[Self],
         data: Data,
         model: Model | None,
         tokenizer: PreTrainedTokenizer | None
     ) -> CompressedData:
         pass
 
-    @staticmethod
+    @classmethod
     @abstractmethod
     def _decompress(
+        cls: Type[Self],
         compressed_data: CompressedData,
         model: Model | None,
         tokenizer: PreTrainedTokenizer | None

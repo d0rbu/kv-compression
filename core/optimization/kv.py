@@ -1,8 +1,10 @@
-from torch import Tensor
+import torch as th
 from loguru import logger
-from typing import Mapping, Any, Callable
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from functools import partial
+from torch.utils.data import TensorDataset
 from transformers.cache_utils import DynamicCache
+from typing import Mapping, Any, Callable, Self, Type
+from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig, Trainer, TrainingArguments, AdamW
 
 from core.optimization.base import OptimizedRepresentation
 
@@ -14,26 +16,52 @@ Model = PreTrainedModel
 
 
 class KVRepresentation(OptimizedRepresentation):
-    @staticmethod
+    @classmethod
     def _compress(
+        cls: Type[Self],
         data: Data,
         model: Model,
         tokenizer: PreTrainedTokenizer,
         num_tokens: int = 128,
+        training_args: TrainingArguments = TrainingArguments(),
     ) -> tuple[CompressedData, Metadata]:
-        pass  # TODO: continuously optimize kv cache of size num_tokens on given model to generate the given data
+        # use hf trainer with standard sequence modelling objective
+        input_ids = tokenizer(data, return_tensors="pt").input_ids
+        dataset = TensorDataset(input_ids)
 
-    @staticmethod
+        # we want to optimize the kv cache, the rest of the model is not important
+        # get model attention k dim
+        kv_tokens = th.tensor([tokenizer.bos_token_id] * num_tokens).unsqueeze(0)
+        forward = partial(model.forward, past_key_values=kv_tokens)
+        optim = AdamW(model.parameters(), lr=1e-5)
+
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            optimizers=
+        )
+
+    @classmethod
     def _decompress(
+        cls: Type[Self],
         compressed_data: CompressedData,
-        model: Model | None,
-        tokenizer: PreTrainedTokenizer
+        model: Model,
+        tokenizer: PreTrainedTokenizer,
+        generation_config: GenerationConfig = GenerationConfig(),
     ) -> tuple[Data, Metadata]:
-        pass  # TODO: decode the compressed data using the given model, tokenizer, and kv cache
+        generate = partial(model.generate, past_key_values=compressed_data)
 
-    @staticmethod
-    def hook_kv_cache(
-        generate_method: Callable,
-        kv_cache: DynamicCache,
-    ) -> Callable:
-        pass  # TODO: return a partial function that hooks the kv cache to the generate method
+        if not generation_config.return_dict_in_generate:
+            logger.warning("generation_config.return_dict_in_generate is False; setting it to True")
+            generation_config.return_dict_in_generate = True
+
+        if generation_config.num_return_sequences != 1:
+            logger.warning("generation_config.num_return_sequences is not 1; setting it to 1")
+            generation_config.num_return_sequences = 1
+
+        output = generate(generation_config=generation_config)
+
+        text = tokenizer.batch_decode(output.sequences, skip_special_tokens=True)[0]
+
+        return text, output
