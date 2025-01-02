@@ -4,7 +4,6 @@ from importlib import import_module
 
 from core.optimization.base import OptimizedRepresentation
 
-
 CORE = os.path.join(os.path.dirname(__file__), "..", "core")
 OPTIMIZATION = os.path.join(CORE, "optimization")
 
@@ -14,7 +13,9 @@ def _get_module_strategy(path: str) -> OptimizedRepresentation | None:
     module_strategy = None
 
     for klass in module.__dict__.values():
-        if not isinstance(klass, type) or not issubclass(klass, OptimizedRepresentation):
+        if not isinstance(klass, type) or not issubclass(
+            klass, OptimizedRepresentation
+        ):
             continue
 
         if module_strategy is not None:
@@ -41,3 +42,9 @@ for file in optimization_files:
 
 # dynamically add the optimization strategies to the OptimizationStrategy enum
 OptimizationStrategy = Enum("OptimizationStrategy", optimization_strategies)
+
+# change optimization strategy keys to be the enum values instead of the filenames
+optimization_strategies = {
+    OptimizationStrategy[filename]: strategy
+    for filename, strategy in optimization_strategies.items()
+}

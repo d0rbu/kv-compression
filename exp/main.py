@@ -1,9 +1,10 @@
+from typing import Any, Type
+
 import arguably
-from typing import Any
 from loguru import logger
 
-from exp.util import OptimizationStrategy
 from core.model import get_model_and_tokenizer
+from exp.util import OptimizationStrategy, optimization_strategies
 
 
 @arguably.command
@@ -18,8 +19,11 @@ def main(
 
     logger.info(f"loading model and tokenizer from {model}")
     model, tokenizer = get_model_and_tokenizer()
+
+    strategy: Type[OptimizationStrategy] = optimization_strategies[strategy]
     logger.info(model)
     logger.info(tokenizer)
+    logger.info(strategy)
 
 
 if __name__ == "__main__":

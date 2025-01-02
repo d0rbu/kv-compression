@@ -1,12 +1,11 @@
-from torch import Tensor
-from loguru import logger
-from functools import lru_cache
 from abc import ABC, abstractmethod
-from typing import Self, Sequence, Mapping, TypeVar, Type
+from functools import lru_cache
+from typing import Self, Type, TypeVar, Any, Mapping
+
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-
 Data = TypeVar("Data")
+Metadata = TypeVar("Metadata", Mapping[str, Any])
 CompressedData = TypeVar("CompressedData")
 Model = TypeVar("Model", PreTrainedModel, str)
 
@@ -18,8 +17,8 @@ class OptimizedRepresentation(ABC):
         cls: Type[Self],
         data: Data,
         model: Model | None,
-        tokenizer: PreTrainedTokenizer | None
-    ) -> CompressedData:
+        tokenizer: PreTrainedTokenizer | None,
+    ) -> tuple[CompressedData, Metadata]:
         pass
 
     @classmethod
@@ -28,8 +27,8 @@ class OptimizedRepresentation(ABC):
         cls: Type[Self],
         compressed_data: CompressedData,
         model: Model | None,
-        tokenizer: PreTrainedTokenizer | None
-    ) -> Data:
+        tokenizer: PreTrainedTokenizer | None,
+    ) -> tuple[Data, Metadata]:
         pass
 
     @classmethod
@@ -38,8 +37,8 @@ class OptimizedRepresentation(ABC):
         cls: Type[Self],
         data: Data,
         model: Model | None,
-        tokenizer: PreTrainedTokenizer | None
-    ) -> CompressedData:
+        tokenizer: PreTrainedTokenizer | None,
+    ) -> tuple[CompressedData, Metadata]:
         return cls._compress(data, model, tokenizer)
 
     @classmethod
@@ -48,6 +47,6 @@ class OptimizedRepresentation(ABC):
         cls: Type[Self],
         compressed_data: CompressedData | None,
         model: Model | None,
-        tokenizer: PreTrainedTokenizer | None
-    ) -> Data:
+        tokenizer: PreTrainedTokenizer | None,
+    ) -> tuple[Data, Metadata]:
         return cls._decompress(compressed_data, model, tokenizer)
