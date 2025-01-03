@@ -5,7 +5,7 @@ from typing import Self, Type, TypeVar, Any, Mapping
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 Data = TypeVar("Data")
-Metadata = TypeVar("Metadata", Mapping[str, Any])
+Metadata = Mapping[str, Any]
 CompressedData = TypeVar("CompressedData")
 Model = TypeVar("Model", PreTrainedModel, str)
 

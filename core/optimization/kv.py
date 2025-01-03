@@ -1,11 +1,10 @@
 import types
-from functools import partial
+from functools import partial, wraps
 from typing import Any, Mapping, Self, Type
 
 import torch as th
 import torch.nn as nn
 from loguru import logger
-from torch.utils.data import TensorDataset
 from transformers import (
     AdamW,
     GenerationConfig,
@@ -13,6 +12,7 @@ from transformers import (
     PreTrainedTokenizer,
     Trainer,
     TrainingArguments,
+    get_linear_schedule_with_warmup,
 )
 from transformers.cache_utils import DynamicCache
 
@@ -24,6 +24,12 @@ CompressedData = DynamicCache
 Model = PreTrainedModel
 
 
+DEFAULT_TRAINING_ARGS = TrainingArguments(
+    output_dir="tmp",
+    overwrite_output_dir=True,
+    per_device_train_batch_size=1,
+)
+
 class KVRepresentation(OptimizedRepresentation):
     @classmethod
     def _compress(
@@ -32,11 +38,10 @@ class KVRepresentation(OptimizedRepresentation):
         model: Model,
         tokenizer: PreTrainedTokenizer,
         num_tokens: int = 128,
-        training_args: TrainingArguments = TrainingArguments(),
+        training_args: TrainingArguments = DEFAULT_TRAINING_ARGS,
     ) -> tuple[CompressedData, Metadata]:
         # use hf trainer with standard sequence modelling objective
-        input_ids = tokenizer(data, return_tensors="pt").input_ids
-        dataset = TensorDataset(input_ids)
+        input_ids = tokenizer(data, return_tensors="pt").input_ids.squeeze(0)
 
         # we want to optimize the kv cache, the rest of the model is not important
         head_dim = model.config.hidden_size // model.config.num_attention_heads
@@ -53,12 +58,15 @@ class KVRepresentation(OptimizedRepresentation):
         kv_cache = DynamicCache.from_legacy_cache(kv_tokens)
 
         # monkey patch the forward method to use the kv cache during training
+        # we also need to keep the signature (⁉️) because its used by hf trainer
         original_forward = model.forward
+        original_unbound_forward = original_forward.__func__
 
-        def forward_with_kv_cache(*args: Any, **kwargs: Any) -> Any:
-            return original_forward(*args, **kwargs, past_key_values=kv_cache)
+        @wraps(original_unbound_forward)
+        def unbound_forward_with_kv_cache(*args: Any, **kwargs: Any) -> Any:
+            return original_unbound_forward(*args, **kwargs, past_key_values=kv_cache)
 
-        model.forward = types.MethodType(forward_with_kv_cache, model)
+        model.forward = types.MethodType(unbound_forward_with_kv_cache, model)
 
         optim = AdamW(
             (kv_tokens,),
@@ -67,12 +75,17 @@ class KVRepresentation(OptimizedRepresentation):
             eps=training_args.adam_epsilon,
             weight_decay=training_args.weight_decay,
         )
+        scheduler = get_linear_schedule_with_warmup(
+            optim,
+            num_warmup_steps=training_args.warmup_steps,
+            num_training_steps=training_args.num_train_epochs,
+        )
 
         trainer = Trainer(
             model=model,
             args=training_args,
-            train_dataset=dataset,
-            optimizers=(optim,),
+            train_dataset=[{"input_ids": input_ids}],
+            optimizers=(optim, scheduler),
         )
         train_output = trainer.train()._asdict()
         train_output["size"] = kv_tokens.numel()

@@ -1,6 +1,7 @@
 import os
 from enum import Enum
 from importlib import import_module
+from typing import Type
 
 from core.optimization.base import OptimizedRepresentation
 
@@ -44,7 +45,7 @@ for file in optimization_files:
 OptimizationStrategy = Enum("OptimizationStrategy", optimization_strategies)
 
 # change optimization strategy keys to be the enum values instead of the filenames
-optimization_strategies = {
+optimization_strategies: dict[OptimizationStrategy, Type[OptimizedRepresentation]] = {
     OptimizationStrategy[filename]: strategy
     for filename, strategy in optimization_strategies.items()
 }
