@@ -25,11 +25,11 @@ def main(
     logger.info(f"loading model and tokenizer from {model}")
     model, tokenizer = get_model_and_tokenizer()
 
-    sample = data.alice
+    sample = data.test
 
-    logger.info("compressing and decompressing sample")
+    logger.info(f"compressing and decompressing sample of length {len(sample)}")
 
-    compressed, compression_metadata = strategy.compress(sample, model, tokenizer)
+    compressed, compression_metadata = strategy.compress(sample, model, tokenizer, num_tokens=len(sample) // 10_000 or 1)
 
     logger.info(compression_metadata)
 

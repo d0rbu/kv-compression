@@ -40,6 +40,8 @@ class KVRepresentation(OptimizedRepresentation):
         num_tokens: int = 128,
         training_args: TrainingArguments = DEFAULT_TRAINING_ARGS,
     ) -> tuple[CompressedData, Metadata]:
+        assert num_tokens > 0, "num_tokens must be greater than 0"
+
         # use hf trainer with standard sequence modelling objective
         input_ids = tokenizer(data, return_tensors="pt").input_ids.squeeze(0)
 
@@ -50,9 +52,7 @@ class KVRepresentation(OptimizedRepresentation):
 
         # legacy cache format is shape (l, 2, b, h, t, d') where d' = head_dim
         # and the first two dims are tuples while the rest are a tensor
-        kv_tokens = nn.Parameter(
-            th.empty(size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim))
-        )
+        kv_tokens = th.empty(size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim)).to(model.device)
         nn.init.xavier_uniform_(kv_tokens)
 
         kv_cache = DynamicCache.from_legacy_cache(kv_tokens)
@@ -84,7 +84,7 @@ class KVRepresentation(OptimizedRepresentation):
         trainer = Trainer(
             model=model,
             args=training_args,
-            train_dataset=[{"input_ids": input_ids}],
+            train_dataset=[{"input_ids": input_ids, "labels": input_ids}],
             optimizers=(optim, scheduler),
         )
         train_output = trainer.train()._asdict()

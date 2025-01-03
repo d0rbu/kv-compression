@@ -38,8 +38,10 @@ class OptimizedRepresentation(ABC):
         data: Data,
         model: Model | None,
         tokenizer: PreTrainedTokenizer | None,
+        *args: Any,
+        **kwargs: Any,
     ) -> tuple[CompressedData, Metadata]:
-        return cls._compress(data, model, tokenizer)
+        return cls._compress(data, model, tokenizer, *args, **kwargs)
 
     @classmethod
     @lru_cache
@@ -48,5 +50,7 @@ class OptimizedRepresentation(ABC):
         compressed_data: CompressedData | None,
         model: Model | None,
         tokenizer: PreTrainedTokenizer | None,
+        *args: Any,
+        **kwargs: Any,
     ) -> tuple[Data, Metadata]:
-        return cls._decompress(compressed_data, model, tokenizer)
+        return cls._decompress(compressed_data, model, tokenizer, *args, **kwargs)
