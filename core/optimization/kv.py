@@ -14,6 +14,7 @@ from transformers import (
     TrainingArguments,
     get_linear_schedule_with_warmup,
 )
+from galore_torch import GaLoreAdamW, GaLoreAdamW8bit
 from transformers.cache_utils import DynamicCache
 
 from core.optimization.base import OptimizedRepresentation
@@ -52,10 +53,13 @@ class KVRepresentation(OptimizedRepresentation):
 
         # legacy cache format is shape (l, 2, b, h, t, d') where d' = head_dim
         # and the first two dims are tuples while the rest are a tensor
-        kv_tokens = th.empty(size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim)).to(model.device)
+        kv_tokens = th.empty(
+            size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim),
+            dtype=th.float16,
+            requires_grad=True,
+            device=model.device,
+        )
         nn.init.xavier_uniform_(kv_tokens)
-
-        kv_cache = DynamicCache.from_legacy_cache(kv_tokens)
 
         # monkey patch the forward method to use the kv cache during training
         # we also need to keep the signature (⁉️) because its used by hf trainer
@@ -64,6 +68,10 @@ class KVRepresentation(OptimizedRepresentation):
 
         @wraps(original_unbound_forward)
         def unbound_forward_with_kv_cache(*args: Any, **kwargs: Any) -> Any:
+            # we need to reinitialize the cache every forward pass
+            # because .backward() clears the computation graph
+            kv_cache = DynamicCache.from_legacy_cache(kv_tokens)
+
             return original_unbound_forward(*args, **kwargs, past_key_values=kv_cache)
 
         model.forward = types.MethodType(unbound_forward_with_kv_cache, model)
@@ -94,7 +102,7 @@ class KVRepresentation(OptimizedRepresentation):
         # restore the original forward method
         model.forward = original_forward
 
-        return kv_cache, train_output
+        return DynamicCache.from_legacy_cache(kv_tokens), train_output
 
     @classmethod
     def _decompress(

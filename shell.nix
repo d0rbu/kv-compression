@@ -1,6 +1,6 @@
 let
   # Pin to a specific nixpkgs commit for reproducibility.
-  pkgs = import (fetchTarball "https://github.com/NixOS/nixpkgs/archive/24bb1b20a9a57175965c0a9fb9533e00e370c88b.tar.gz") {config.allowUnfree = true;};
+  pkgs = import (fetchTarball "https://github.com/NixOS/nixpkgs/archive/c807ed4f48d7055cad44555ced741d1651087156.tar.gz") {config.allowUnfree = true;};
   python = pkgs.python311;
   pythonPackages = pkgs.python311Packages;
 
@@ -20,16 +20,12 @@ let
 
   bitsandbytes = python.pkgs.buildPythonPackage rec {
     pname = "bitsandbytes";
-    version = "0.44.1";
+    version = "0.45.0";
     format = "wheel";
     src = pkgs.fetchurl {
-      url = "https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_multi-backend-refactor/bitsandbytes-0.44.1.dev0-py3-none-manylinux_2_24_x86_64.whl";
-      sha256 = "sha256-Zt7aK5nO4NTlKhg9m6xcjoYYzZtNSTPM8juQhiLWuHk=";
+      url = "https://files.pythonhosted.org/packages/99/9a/f41d252bf8b0bc5969b4dce1274cd04b7ddc541de1060dd27eca680bc1b2/bitsandbytes-0.45.0-py3-none-manylinux_2_24_x86_64.whl";
+      sha256 = "0f0323de1ff1fdf8383e79bdad1283516a4c05a6fd2b44a363bf4e059422305b";
     };
-
-    propagatedBuildInputs = [
-      pythonPackages.triton
-    ];
   };
 
   galore-torch = python.pkgs.buildPythonPackage rec {
@@ -63,6 +59,16 @@ let
     ];
   };
 
+  peft = python.pkgs.buildPythonPackage rec {
+    pname = "peft";
+    version = "0.14.0";
+    format = "wheel";
+    src = pkgs.fetchurl {
+      url = "https://files.pythonhosted.org/packages/88/05/e58e3aaa36544d30a917814e336fc65a746f708e5874945e92999bc22fa3/peft-0.14.0-py3-none-any.whl";
+      sha256 = "2f04f3a870c3baf30f15e7dcaa5dd70d3e54cfdd146d3c6c187735d3ae0a0700";
+    };
+  };
+
   huggingface-hub = python.pkgs.buildPythonPackage rec {
     pname = "huggingface-hub[cli]";
     version = "0.25.2";
@@ -87,6 +93,7 @@ let
       galore-torch
       datasets
       transformers
+      peft
       evaluate
       accelerate-bin
       pip
