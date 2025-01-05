@@ -1,5 +1,4 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from peft import LoraConfig
 
 
 def get_model_and_tokenizer(
@@ -9,18 +8,9 @@ def get_model_and_tokenizer(
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         device_map="auto",
-        quantization_config=BitsAndBytesConfig(
-            load_in_8bit=True,
-        ),
+        # quantization_config=BitsAndBytesConfig(
+        #     load_in_8bit=True,
+        # ),
     )
-
-    lora_config = LoraConfig(
-        target_modules=["q_proj"],
-        init_lora_weights=False,
-        r=1,
-    )
-
-    model.add_adapter(lora_config, adapter_name="placeholder")
-    model.disable_adapters()
 
     return model, tokenizer

@@ -1,5 +1,3 @@
-import types
-from functools import partial, wraps
 from typing import Any, Mapping, Self, Type
 
 import torch as th
@@ -18,20 +16,28 @@ from galore_torch import GaLoreAdamW, GaLoreAdamW8bit
 from transformers.cache_utils import DynamicCache
 
 from core.optimization.base import OptimizedRepresentation
+from core.optimization.util import fix_quantization_class, monkey_patch_kv_cache
+
 
 Data = str
 Metadata = Mapping[str, Any]
 CompressedData = DynamicCache
 Model = PreTrainedModel
 
-
-DEFAULT_TRAINING_ARGS = TrainingArguments(
-    output_dir="tmp",
-    overwrite_output_dir=True,
-    per_device_train_batch_size=1,
-)
-
 class KVRepresentation(OptimizedRepresentation):
+    DEFAULT_TRAINING_ARGS = TrainingArguments(
+        output_dir="tmp",
+        overwrite_output_dir=True,
+        per_device_train_batch_size=1,
+        num_train_epochs=1024,
+        weight_decay=0.0,
+        learning_rate=2e-3,
+        logging_steps=16,
+        logging_first_step=True,
+        max_grad_norm=1.0,
+    )
+
+
     @classmethod
     def _compress(
         cls: Type[Self],
@@ -43,41 +49,31 @@ class KVRepresentation(OptimizedRepresentation):
     ) -> tuple[CompressedData, Metadata]:
         assert num_tokens > 0, "num_tokens must be greater than 0"
 
+        fix_quantization_class(model)
+
         # use hf trainer with standard sequence modelling objective
-        input_ids = tokenizer(data, return_tensors="pt").input_ids.squeeze(0)
+        data_with_eos_token = data + tokenizer.eos_token
+        input_ids = tokenizer(data_with_eos_token, return_tensors="pt").input_ids.squeeze(0)
 
         # we want to optimize the kv cache, the rest of the model is not important
         head_dim = model.config.hidden_size // model.config.num_attention_heads
-        num_kv_heads = model.config.num_key_value_heads
+        num_kv_heads = getattr(model.config, "num_key_value_heads", 0) or model.config.num_attention_heads
         num_layers = model.config.num_hidden_layers
 
         # legacy cache format is shape (l, 2, b, h, t, d') where d' = head_dim
         # and the first two dims are tuples while the rest are a tensor
-        kv_tokens = th.empty(
+        kv_tokens = th.zeros(
             size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim),
-            dtype=th.float16,
+            dtype=th.float32,
             requires_grad=True,
             device=model.device,
         )
         nn.init.xavier_uniform_(kv_tokens)
 
-        # monkey patch the forward method to use the kv cache during training
-        # we also need to keep the signature (⁉️) because its used by hf trainer
-        original_forward = model.forward
-        original_unbound_forward = original_forward.__func__
-
-        @wraps(original_unbound_forward)
-        def unbound_forward_with_kv_cache(*args: Any, **kwargs: Any) -> Any:
-            # we need to reinitialize the cache every forward pass
-            # because .backward() clears the computation graph
-            kv_cache = DynamicCache.from_legacy_cache(kv_tokens)
-
-            return original_unbound_forward(*args, **kwargs, past_key_values=kv_cache)
-
-        model.forward = types.MethodType(unbound_forward_with_kv_cache, model)
+        unpatch = monkey_patch_kv_cache(model, kv_tokens)
 
         optim = AdamW(
-            (kv_tokens,),
+            [kv_tokens],
             lr=training_args.learning_rate,
             betas=(training_args.adam_beta1, training_args.adam_beta2),
             eps=training_args.adam_epsilon,
@@ -100,9 +96,17 @@ class KVRepresentation(OptimizedRepresentation):
         train_output["bytes"] = kv_tokens.element_size() * kv_tokens.numel()
 
         # restore the original forward method
-        model.forward = original_forward
+        unpatch()
 
         return DynamicCache.from_legacy_cache(kv_tokens), train_output
+    
+    DEFAULT_GENERATION_CONFIG = GenerationConfig(
+        max_length=131072,
+        num_return_sequences=1,
+        return_dict_in_generate=True,
+        do_sample=False,
+        output_logits=True,
+    )
 
     @classmethod
     def _decompress(
@@ -110,10 +114,8 @@ class KVRepresentation(OptimizedRepresentation):
         compressed_data: CompressedData,
         model: Model,
         tokenizer: PreTrainedTokenizer,
-        generation_config: GenerationConfig = GenerationConfig(),
+        generation_config: GenerationConfig = DEFAULT_GENERATION_CONFIG
     ) -> tuple[Data, Metadata]:
-        generate = partial(model.generate, past_key_values=compressed_data)
-
         if not generation_config.return_dict_in_generate:
             logger.warning(
                 "generation_config.return_dict_in_generate is False; setting it to True"
@@ -126,7 +128,19 @@ class KVRepresentation(OptimizedRepresentation):
             )
             generation_config.num_return_sequences = 1
 
-        output = generate(generation_config=generation_config)
+        # model.generate assumes our input ids includes the cached tokens, so we prefill with random values
+        input_ids = th.empty(
+            size=(1, compressed_data.get_seq_length() + 1),
+            dtype=th.long,
+            device=model.device,
+        )
+        input_ids[-1] = tokenizer.bos_token_id
+
+        output = model.generate(
+            inputs=input_ids,
+            generation_config=generation_config,
+            past_key_values=compressed_data
+        )
 
         text = tokenizer.batch_decode(output.sequences, skip_special_tokens=True)[0]
 
