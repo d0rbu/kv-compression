@@ -12,26 +12,26 @@ from transformers import (
     TrainingArguments,
     get_linear_schedule_with_warmup,
 )
-from galore_torch import GaLoreAdamW, GaLoreAdamW8bit
-from transformers.cache_utils import DynamicCache
 
 from core.optimization.base import OptimizedRepresentation
-from core.optimization.util import fix_quantization_class, monkey_patch_kv_cache, update_dict_like, TRUE_DEFAULT_TRAINING_ARGS, TRUE_DEFAULT_GENERATION_CONFIG
+from core.optimization.util import fix_quantization_class, monkey_patch_trainable_bos_token, update_dict_like, TRUE_DEFAULT_GENERATION_CONFIG, TRUE_DEFAULT_TRAINING_ARGS
 
 
 Data = str
 Metadata = Mapping[str, Any]
-CompressedData = DynamicCache
+CompressedData = th.Tensor
 Model = PreTrainedModel
 
-class KVRepresentation(OptimizedRepresentation):
+
+class PrefixTokenRepresentation(OptimizedRepresentation):
     DEFAULT_TRAINING_ARGS = TrainingArguments(
         output_dir="tmp",
+        dataloader_pin_memory=False,
         overwrite_output_dir=True,
         per_device_train_batch_size=1,
         num_train_epochs=1024,
         weight_decay=0.0,
-        learning_rate=2e-3,
+        learning_rate=8e-6,
         logging_steps=16,
         logging_first_step=True,
         max_grad_norm=1.0,
@@ -60,27 +60,17 @@ class KVRepresentation(OptimizedRepresentation):
 
         # use hf trainer with standard sequence modelling objective
         data_with_eos_token = data + tokenizer.eos_token
-        input_ids = tokenizer(data_with_eos_token, return_tensors="pt").input_ids.squeeze(0)
+        input_ids = tokenizer(data_with_eos_token, return_tensors="pt").input_ids.squeeze(0).to(model.device)
+        embeddings = model.get_input_embeddings()
+        inputs_embeds = embeddings(input_ids)
 
-        # we want to optimize the kv cache, the rest of the model is not important
-        head_dim = model.config.hidden_size // model.config.num_attention_heads
-        num_kv_heads = getattr(model.config, "num_key_value_heads", 0) or model.config.num_attention_heads
-        num_layers = model.config.num_hidden_layers
+        prefix_tokens = th.empty(num_tokens, model.config.hidden_size, device=model.device, requires_grad=True)
+        nn.init.xavier_uniform_(prefix_tokens)
 
-        # legacy cache format is shape (l, 2, b, h, t, d') where d' = head_dim
-        # and the first two dims are tuples while the rest are a tensor
-        kv_tokens = th.empty(
-            size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim),
-            dtype=th.float32,
-            requires_grad=True,
-            device=model.device,
-        )
-        nn.init.xavier_uniform_(kv_tokens)
-
-        unpatch = monkey_patch_kv_cache(model, kv_tokens)
+        unpatch = monkey_patch_trainable_bos_token(model, prefix_tokens)
 
         optim = AdamW(
-            [kv_tokens],
+            [prefix_tokens],
             lr=training_args.learning_rate,
             betas=(training_args.adam_beta1, training_args.adam_beta2),
             eps=training_args.adam_epsilon,
@@ -95,17 +85,17 @@ class KVRepresentation(OptimizedRepresentation):
         trainer = Trainer(
             model=model,
             args=training_args,
-            train_dataset=[{"input_ids": input_ids, "labels": input_ids}],
+            train_dataset=[{"inputs_embeds": inputs_embeds.detach(), "labels": input_ids}],
             optimizers=(optim, scheduler),
         )
         train_output = trainer.train()._asdict()
-        train_output["size"] = kv_tokens.numel()
-        train_output["bytes"] = kv_tokens.element_size() * kv_tokens.numel()
+        train_output["size"] = prefix_tokens.numel()
+        train_output["bytes"] = prefix_tokens.numel() * prefix_tokens.element_size()
 
         # restore the original forward method
         unpatch()
 
-        return DynamicCache.from_legacy_cache(kv_tokens), train_output
+        return prefix_tokens, train_output
     
     DEFAULT_GENERATION_CONFIG = GenerationConfig(
         max_length=131072,
@@ -134,7 +124,7 @@ class KVRepresentation(OptimizedRepresentation):
                 "generation_config.num_return_sequences is not 1; setting it to 1"
             )
             generation_config.num_return_sequences = 1
-        
+
         # update default generation config with user provided generation config
         generation_config = update_dict_like(
             generation_config,
@@ -142,18 +132,9 @@ class KVRepresentation(OptimizedRepresentation):
             TRUE_DEFAULT_GENERATION_CONFIG
         )
 
-        # model.generate assumes our input ids includes the cached tokens, so we prefill with random values
-        input_ids = th.empty(
-            size=(1, compressed_data.get_seq_length() + 1),
-            dtype=th.long,
-            device=model.device,
-        )
-        input_ids[-1] = tokenizer.bos_token_id
-
         output = model.generate(
-            inputs=input_ids,
-            generation_config=generation_config,
-            past_key_values=compressed_data
+            inputs_embeds=compressed_data.unsqueeze(0),
+            generation_config=generation_config
         )
 
         text = tokenizer.batch_decode(output.sequences, skip_special_tokens=True)[0]

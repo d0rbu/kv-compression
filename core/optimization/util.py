@@ -1,9 +1,9 @@
 
 import types
 import torch as th
-from typing import Self, Sequence, Any, Callable
+from typing import Self, Sequence, Any, Callable, TypeVar
 from functools import wraps
-from transformers import PreTrainedModel, DynamicCache
+from transformers import PreTrainedModel, DynamicCache, TrainingArguments, GenerationConfig
 from transformers.quantizers.quantizer_bnb_8bit import Bnb8BitHfQuantizer
 
 
@@ -56,3 +56,63 @@ def monkey_patch_kv_cache(
         model.forward = original_forward
 
     return unpatch
+
+
+def monkey_patch_trainable_bos_token(
+    model: PreTrainedModel,
+    prefix_tokens: th.Tensor,
+) -> Callable[[], None]:
+    # monkey patch the forward method to prepend the input embeddings with the bos token
+    # we also need to keep the signature (⁉️) because its used by hf trainer
+    original_forward = model.forward
+    original_unbound_forward = original_forward.__func__
+
+    @wraps(original_unbound_forward)
+    def unbound_forward_with_prefix(*args: Any, **kwargs: Any) -> Any:
+        # we need to reinitialize the input embeds every forward pass
+        # because .backward() clears the computation graph
+        input_embeds = kwargs.pop("inputs_embeds", None)
+
+        if input_embeds is None:
+            raise ValueError("inputs_embeds must be provided to the monkeypatched model.forward method")
+
+        labels = kwargs.pop("labels", None)
+        if labels is None:
+            raise ValueError("labels must be provided to the monkeypatched model.forward method")
+
+        input_embeds = th.cat([prefix_tokens.unsqueeze(0), input_embeds], dim=1)
+        ignored_labels = th.full((1, prefix_tokens.size(0)), fill_value=-100, dtype=th.long, device=labels.device)
+        labels = th.cat([ignored_labels, labels], dim=1)
+
+        return original_unbound_forward(*args, **kwargs, inputs_embeds=input_embeds, labels=labels)
+
+    model.forward = types.MethodType(unbound_forward_with_prefix, model)
+
+    def unpatch() -> None:
+        model.forward = original_forward
+
+    return unpatch
+
+
+T = TypeVar("T")
+
+def update_dict_like(target: T, source: T, default: T) -> T:
+    # for things like hf generation config or training args
+    target_dict = target.to_dict()
+    source_dict = source.to_dict()
+    default_dict = default.to_dict()
+
+    non_default_source = {
+        key: value
+        for key, value in target_dict.items()
+        if value != default_dict[key]
+    }
+
+    source_dict.update(non_default_source)
+    
+    dict_like = type(target)
+
+    return dict_like(**source_dict)
+
+TRUE_DEFAULT_TRAINING_ARGS = TrainingArguments(output_dir="tmp")
+TRUE_DEFAULT_GENERATION_CONFIG = GenerationConfig()
