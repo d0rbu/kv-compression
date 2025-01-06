@@ -19,6 +19,8 @@ def main(
     progressive: bool = False,
     data: str = "sorcerers_stone_4",
     log_level: str = "INFO",
+    lr: float | None = None,
+    load: bool = False,
 ):
     assert not progressive, "progressive coding optimization is not supported yet"
 
@@ -49,7 +51,9 @@ def main(
             logging_steps=32,
             logging_first_step=True,
             max_grad_norm=1.0,
+            learning_rate=lr or 0.00005,
         ),
+        load=load,
     )
 
     logger.info(compression_metadata)

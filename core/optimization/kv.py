@@ -36,6 +36,7 @@ class KVRepresentation(OptimizedRepresentation):
         logging_first_step=True,
         max_grad_norm=1.0,
     )
+    COMPRESSED_PATH = "kv_tokens.pt"
 
 
     @classmethod
@@ -46,6 +47,7 @@ class KVRepresentation(OptimizedRepresentation):
         tokenizer: PreTrainedTokenizer,
         num_tokens: int = 128,
         training_args: TrainingArguments = DEFAULT_TRAINING_ARGS,
+        load: bool = False,
     ) -> tuple[CompressedData, Metadata]:
         assert num_tokens > 0, "num_tokens must be greater than 0"
 
@@ -69,13 +71,16 @@ class KVRepresentation(OptimizedRepresentation):
 
         # legacy cache format is shape (l, 2, b, h, t, d') where d' = head_dim
         # and the first two dims are tuples while the rest are a tensor
-        kv_tokens = th.empty(
-            size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim),
-            dtype=th.float32,
-            requires_grad=True,
-            device=model.device,
-        )
-        nn.init.xavier_uniform_(kv_tokens)
+        if load:
+            kv_tokens = th.load(cls.COMPRESSED_PATH)
+        else:
+            kv_tokens = th.empty(
+                size=(num_layers, 2, 1, num_kv_heads, num_tokens, head_dim),
+                dtype=th.float32,
+                requires_grad=True,
+                device=model.device,
+            )
+            nn.init.xavier_uniform_(kv_tokens)
 
         unpatch = monkey_patch_kv_cache(model, kv_tokens)
 
@@ -104,6 +109,9 @@ class KVRepresentation(OptimizedRepresentation):
 
         # restore the original forward method
         unpatch()
+
+        # save to disk
+        th.save(kv_tokens, cls.COMPRESSED_PATH)
 
         return DynamicCache.from_legacy_cache(kv_tokens), train_output
     
