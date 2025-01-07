@@ -20,6 +20,7 @@ def main(
     data: str = "sorcerers_stone_4",
     log_level: str = "INFO",
     lr: float | None = None,
+    epochs: int | None = None,
     load: bool = False,
 ):
     assert not progressive, "progressive coding optimization is not supported yet"
@@ -46,7 +47,7 @@ def main(
         num_tokens=num_tokens,
         training_args=TrainingArguments(
             output_dir="tmp",
-            num_train_epochs=len(sample) * 2 + 600,
+            num_train_epochs=epochs or len(sample) * 2 + 600,
             weight_decay=0.0,
             logging_steps=32,
             logging_first_step=True,
