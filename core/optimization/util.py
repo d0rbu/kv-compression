@@ -5,6 +5,7 @@ from typing import Self, Sequence, Any, Callable, TypeVar
 from functools import wraps
 from transformers import PreTrainedModel, DynamicCache, TrainingArguments, GenerationConfig
 from transformers.quantizers.quantizer_bnb_8bit import Bnb8BitHfQuantizer
+from peft import LoraConfig
 
 
 class Modified8BitHfQuantizer(Bnb8BitHfQuantizer):
@@ -116,3 +117,4 @@ def update_dict_like(target: T, source: T, default: T) -> T:
 
 TRUE_DEFAULT_TRAINING_ARGS = TrainingArguments(output_dir="tmp")
 TRUE_DEFAULT_GENERATION_CONFIG = GenerationConfig()
+TRUE_DEFAULT_LORA_CONFIG = LoraConfig()

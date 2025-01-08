@@ -12,9 +12,10 @@ from transformers import (
     TrainingArguments,
     get_linear_schedule_with_warmup,
 )
+from peft import LoraConfig
 
 from core.optimization.base import OptimizedRepresentation
-from core.optimization.util import fix_quantization_class, monkey_patch_trainable_bos_token, update_dict_like, TRUE_DEFAULT_GENERATION_CONFIG, TRUE_DEFAULT_TRAINING_ARGS
+from core.optimization.util import fix_quantization_class, monkey_patch_trainable_bos_token, update_dict_like, TRUE_DEFAULT_GENERATION_CONFIG, TRUE_DEFAULT_TRAINING_ARGS, TRUE_DEFAULT_LORA_CONFIG
 
 
 Data = str
@@ -36,6 +37,13 @@ class LoRARepresentation(OptimizedRepresentation):
         max_grad_norm=1.0,
     )
 
+    DEFAULT_LORA_CONFIG = LoraConfig(
+        r=1,
+        target_modules=["k_proj"],
+        lora_alpha=1,
+        lora_dropout=0.0,
+        layers_to_transform=[i for i in range(9, 16)],
+    )
 
     @classmethod
     def _compress(
@@ -45,6 +53,7 @@ class LoRARepresentation(OptimizedRepresentation):
         tokenizer: PreTrainedTokenizer,
         r: int = 1,
         training_args: TrainingArguments = DEFAULT_TRAINING_ARGS,
+        lora_config: LoraConfig = DEFAULT_LORA_CONFIG,
     ) -> tuple[CompressedData, Metadata]:
         assert r > 0, "r must be greater than 0"
 
@@ -53,6 +62,12 @@ class LoRARepresentation(OptimizedRepresentation):
             training_args,
             cls.DEFAULT_TRAINING_ARGS,
             TRUE_DEFAULT_TRAINING_ARGS
+        )
+        # same for lora config
+        lora_config = update_dict_like(
+            lora_config,
+            cls.DEFAULT_LORA_CONFIG,
+            TRUE_DEFAULT_LORA_CONFIG
         )
 
         fix_quantization_class(model)

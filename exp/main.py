@@ -70,7 +70,7 @@ def main(
 
     logger.debug(decompression_metadata)
     logger.info(compressed)
-    logger.info(decompressed[:1000])
+    logger.info(decompressed)
 
 
 if __name__ == "__main__":
