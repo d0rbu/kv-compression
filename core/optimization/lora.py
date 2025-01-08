@@ -20,7 +20,7 @@ from core.optimization.util import fix_quantization_class, monkey_patch_trainabl
 
 Data = str
 Metadata = Mapping[str, Any]
-CompressedData = th.Tensor
+CompressedData = str
 Model = PreTrainedModel
 
 
@@ -31,7 +31,7 @@ class LoRARepresentation(OptimizedRepresentation):
         per_device_train_batch_size=1,
         num_train_epochs=1024,
         weight_decay=0.0,
-        learning_rate=5e-5,
+        learning_rate=4e-4,
         logging_steps=32,
         logging_first_step=True,
         max_grad_norm=1.0,
@@ -39,10 +39,11 @@ class LoRARepresentation(OptimizedRepresentation):
 
     DEFAULT_LORA_CONFIG = LoraConfig(
         r=1,
-        target_modules=["k_proj"],
+        target_modules=["v_proj"],
         lora_alpha=1,
         lora_dropout=0.0,
         layers_to_transform=[i for i in range(9, 16)],
+        init_lora_weights="pissa",
     )
 
     @classmethod
@@ -54,6 +55,7 @@ class LoRARepresentation(OptimizedRepresentation):
         r: int = 1,
         training_args: TrainingArguments = DEFAULT_TRAINING_ARGS,
         lora_config: LoraConfig = DEFAULT_LORA_CONFIG,
+        **kwargs: Any,
     ) -> tuple[CompressedData, Metadata]:
         assert r > 0, "r must be greater than 0"
 
@@ -72,46 +74,28 @@ class LoRARepresentation(OptimizedRepresentation):
 
         fix_quantization_class(model)
 
-        # TODO: add an adapter for lora
+        adapter_name = "compression_adapter_0"
+        model.add_adapter(lora_config, adapter_name=adapter_name)
 
         # use hf trainer with standard sequence modelling objective
         data_with_eos_token = data + tokenizer.eos_token
-        input_ids = tokenizer(data_with_eos_token, return_tensors="pt").input_ids.squeeze(0).to(model.device)
-        embeddings = model.get_input_embeddings()
-        inputs_embeds = embeddings(input_ids)
-
-        prefix_tokens = th.empty(num_tokens, model.config.hidden_size, device=model.device, requires_grad=True)
-        nn.init.xavier_uniform_(prefix_tokens)
-
-        unpatch = monkey_patch_trainable_bos_token(model, prefix_tokens)
-
-        optim = AdamW(
-            [prefix_tokens],
-            lr=training_args.learning_rate,
-            betas=(training_args.adam_beta1, training_args.adam_beta2),
-            eps=training_args.adam_epsilon,
-            weight_decay=training_args.weight_decay,
-        )
-        scheduler = get_linear_schedule_with_warmup(
-            optim,
-            num_warmup_steps=training_args.warmup_steps,
-            num_training_steps=training_args.num_train_epochs,
-        )
+        input_ids = tokenizer(data_with_eos_token, return_tensors="pt").input_ids.squeeze(0)
 
         trainer = Trainer(
             model=model,
             args=training_args,
-            train_dataset=[{"inputs_embeds": inputs_embeds.detach(), "labels": input_ids}],
-            optimizers=(optim, scheduler),
+            train_dataset=[{"input_ids": input_ids, "labels": input_ids}],
         )
         train_output = trainer.train()._asdict()
-        train_output["size"] = prefix_tokens.numel()
-        train_output["bytes"] = prefix_tokens.numel() * prefix_tokens.element_size()
 
-        # restore the original forward method
-        unpatch()
+        adapter_weights = model.get_adapter_state_dict("compression_adapter_0")
+        adapter_weight_sizes = [weight.numel() for weight in adapter_weights.values()]
+        adapter_weight_byteses = [weight.numel() * weight.element_size() for weight in adapter_weights.values()]
 
-        return prefix_tokens, train_output
+        train_output["size"] = sum(adapter_weight_sizes)
+        train_output["bytes"] = sum(adapter_weight_byteses)
+
+        return adapter_name, train_output
     
     DEFAULT_GENERATION_CONFIG = GenerationConfig(
         max_length=131072,
@@ -148,8 +132,11 @@ class LoRARepresentation(OptimizedRepresentation):
             TRUE_DEFAULT_GENERATION_CONFIG
         )
 
+        # enable the adapter
+        model.set_adapter(compressed_data)
+        model.enable_adapters()
+
         output = model.generate(
-            inputs_embeds=compressed_data.unsqueeze(0),
             generation_config=generation_config
         )
 
