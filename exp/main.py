@@ -16,15 +16,12 @@ def main(
     *args: Any,
     model: str = "meta-llama/Llama-3.2-1B",
     strategy: OptimizationStrategy = OptimizationStrategy.kv,
-    progressive: bool = False,
     data: str = "sorcerers_stone_4",
     log_level: str = "INFO",
     lr: float | None = None,
     epochs: int | None = None,
     load: bool = False,
 ):
-    assert not progressive, "progressive coding optimization is not supported yet"
-
     logger.remove()
     logger.add(sys.stderr, level=log_level)
 
